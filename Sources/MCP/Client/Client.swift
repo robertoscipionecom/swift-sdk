@@ -214,9 +214,9 @@ public actor Client {
         // Start message handling loop
         task = Task {
             guard let connection = self.connection else { return }
-            repeat {
+            readLoop: repeat {
                 // Check for cancellation before starting the iteration
-                if Task.isCancelled { break }
+                if Task.isCancelled { break readLoop }
 
                 do {
                     let stream = await connection.receive()
@@ -244,13 +244,21 @@ public actor Client {
                             )
                         }
                     }
+
+                    // The stream finished without throwing: the connection is over.
+                    // No transport reopens a stream once it has finished — every one
+                    // of them finishes it only on EOF, on error, or on disconnect.
+                    // Calling `receive()` again would hand back the very same
+                    // finished stream, so the loop would spin at 100% CPU forever
+                    // instead of terminating.
+                    break readLoop
                 } catch let error where MCPError.isResourceTemporarilyUnavailable(error) {
                     try? await Task.sleep(for: .milliseconds(10))
                     continue
                 } catch {
                     await logger?.error(
                         "Error in message handling loop", metadata: ["error": "\(error)"])
-                    break
+                    break readLoop
                 }
             } while true
             await self.logger?.debug("Client message handling loop task is terminating.")
